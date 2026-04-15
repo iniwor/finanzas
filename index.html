@@ -303,28 +303,40 @@ function renderSection(){
 
 // ══════════ REGISTRO ══════════
 let regFilter="todos",regShowForm=false,regEditId=null,regShowPending="all";
-function isAplicado(r){return r.aplicado!==false;} // backward compatible
+function isAplicado(r){return r.aplicado!==false;}
+function getUpcoming(){
+  // Generate preview rows for next upcoming occurrence of each active rule
+  const today=tdy();const previews=[];
+  DATA.recurrentes.filter(r=>r.activa).forEach(rc=>{
+    const cur=rc.ultimaGen||rc.fechaInicio;
+    const nx=nextD(cur,rc.freq,rc.customDays);
+    if(nx&&(!rc.fechaFin||nx<=rc.fechaFin)&&!DATA.registros.some(r=>r.recId===rc.id&&r.fecha===nx)){
+      previews.push({id:"prev-"+rc.id,fecha:nx,tipo:rc.tipo,categoria:rc.categoria,desc:rc.desc+" ↻ (próximo)",metodo:rc.metodo,monto:rc.monto,recId:rc.id,tarjetaId:rc.tarjetaId||"",metaId:rc.metaId||"",aplicado:false,isPreview:true});
+    }
+  });
+  return previews;
+}
 function renderRegistro(){
   const el=document.getElementById("sec-registro");
-  const sorted=[...DATA.registros].sort((a,b)=>b.fecha.localeCompare(a.fecha));
+  const upcoming=getUpcoming();
+  const allEntries=[...DATA.registros,...upcoming];
+  const sorted=allEntries.sort((a,b)=>b.fecha.localeCompare(a.fecha));
   const filtered=regFilter==="todos"?sorted:sorted.filter(r=>pD(r.fecha).getMonth()===parseInt(regFilter));
   const byStatus=regShowPending==="pending"?filtered.filter(r=>!isAplicado(r)):regShowPending==="applied"?filtered.filter(r=>isAplicado(r)):filtered;
-  // Saldo only counts aplicado entries
   let sal=0;const allForSaldo=[...filtered].reverse();
-  const saldoMap={};allForSaldo.forEach(r=>{if(isAplicado(r))sal+=r.tipo==="Ingreso"?r.monto:-r.monto;saldoMap[r.id]=sal;});
+  const saldoMap={};allForSaldo.forEach(r=>{if(isAplicado(r)&&!r.isPreview)sal+=r.tipo==="Ingreso"?r.monto:-r.monto;saldoMap[r.id]=sal;});
   const ws=byStatus.map(r=>({...r,sal:saldoMap[r.id]||0}));
-
   const pendCount=DATA.registros.filter(r=>!isAplicado(r)).length;
+  const upCount=upcoming.length;
 
   let h=`<div class="sec-hdr"><h2 class="sec-title">Registro Diario</h2><div style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="btn btn-s" onclick="toggleImport()">📥 Importar</button>
     <button class="btn btn-s" onclick="exportCSV()">📤 Exportar</button>
-    <button class="btn btn-s" onclick="toggleRecList()">🔄 Reglas<span class="cnt-badge">${DATA.recurrentes.filter(r=>r.activa).length}</span></button>
+    <button class="btn btn-s" onclick="openReglasModal()">⚙ Reglas<span class="cnt-badge">${DATA.recurrentes.filter(r=>r.activa).length}</span></button>
     <button class="btn btn-p" onclick="toggleRegForm()">+ Nuevo</button>
   </div></div>`;
 
   h+=`<div id="import-panel" style="display:none"></div>`;
-  h+=`<div id="rec-panel" style="display:none"></div>`;
   h+=`<div id="reg-form" style="display:none"></div>`;
 
   h+=`<div style="display:flex;align-items:center;gap:8px;margin:12px 0;flex-wrap:wrap">
@@ -339,30 +351,48 @@ function renderRegistro(){
       <option value="pending" ${regShowPending==="pending"?"selected":""}>⏳ Pendientes${pendCount?" ("+pendCount+")":""}</option>
     </select>
     ${pendCount>0?`<button class="btn btn-green" style="font-size:11px;padding:5px 12px" onclick="applyAll()">✅ Aplicar todos (${pendCount})</button>`:""}
-    <span style="font-size:12px;color:var(--light);margin-left:auto">${byStatus.length} registros</span>
+    <span style="font-size:12px;color:var(--light);margin-left:auto">${ws.length} registros</span>
   </div>`;
 
   h+=`<div class="tw"><table><thead><tr>${["✓","Fecha","Tipo","Categoría","Descripción","Método","Monto","Saldo",""].map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>`;
   if(ws.length===0)h+=`<tr><td colspan="9" style="padding:32px;text-align:center;color:var(--light)">Sin registros.</td></tr>`;
   ws.forEach(r=>{
     const ap=isAplicado(r);
+    const isPrev=r.isPreview;
     const tn=r.tarjetaId?tarjetaNombre(r.tarjetaId):"";
     const mn=r.metaId?metaNombre(r.metaId):"";
     const tags=(tn||mn)?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">${tn?`<span style="font-size:9px;background:#dbeafe;color:#1d4ed8;padding:1px 5px;border-radius:3px">${tn}</span>`:""}${mn?`<span style="font-size:9px;background:#fce7f3;color:#be185d;padding:1px 5px;border-radius:3px">${mn}</span>`:""}</div>`:"";
-    h+=`<tr style="opacity:${ap?1:0.55};${!ap?"background:#fefce8":""}">
-      <td><input type="checkbox" ${ap?"checked":""} onchange="toggleAplicado('${r.id}')" style="width:18px;height:18px;cursor:pointer;accent-color:#16a34a"></td>
+    const rowBg=isPrev?"background:#f0f9ff;border-left:3px solid #93c5fd":(!ap?"background:#fefce8":"");
+    h+=`<tr style="opacity:${ap&&!isPrev?1:0.55};${rowBg}">
+      <td>${isPrev?'<span style="font-size:11px;color:#3b82f6" title="Programado próximo">🕐</span>':`<input type="checkbox" ${ap?"checked":""} onchange="toggleAplicado('${r.id}')" style="width:18px;height:18px;cursor:pointer;accent-color:#16a34a">`}</td>
       <td>${pD(r.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}</td>
       <td><span class="badge ${r.tipo==="Ingreso"?"b-green":"b-red"}">${r.tipo==="Ingreso"?"▲":"▼"} ${r.tipo}</span></td>
       <td>${r.categoria}</td>
-      <td style="text-align:left;max-width:200px;overflow:hidden">${r.desc}${r.recId?'<span style="font-size:10px;color:var(--purple)"> 🔄</span>':''}${tags}</td>
+      <td style="text-align:left;max-width:200px;overflow:hidden">${r.desc}${r.recId&&!isPrev?'<span style="font-size:10px;color:var(--purple)"> 🔄</span>':''}${tags}</td>
       <td><span class="mtag">${r.metodo}</span></td>
       <td style="font-weight:600;color:${r.tipo==="Ingreso"?"var(--green)":"var(--red)"}">${fmt(r.monto)}</td>
-      <td style="font-weight:700;color:${r.sal>=0?"var(--text)":"var(--red)"}">${ap?fmt(r.sal):'<span style="color:var(--light)">—</span>'}</td>
-      <td><button class="ib" onclick="editReg('${r.id}')">✏️</button><button class="ib" onclick="delReg('${r.id}')">🗑</button></td>
+      <td style="font-weight:700;color:${r.sal>=0?"var(--text)":"var(--red)"}">${ap&&!isPrev?fmt(r.sal):'<span style="color:var(--light)">—</span>'}</td>
+      <td>${!isPrev?`<button class="ib" onclick="editReg('${r.id}')">✏️</button><button class="ib" onclick="delReg('${r.id}')">🗑</button>`:''}</td>
     </tr>`;
   });
   h+=`</tbody></table></div>`;
+
+  // Reglas modal overlay
+  h+=`<div id="reglas-modal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:100;display:none;align-items:center;justify-content:center" onclick="if(event.target===this)this.style.display='none'">
+    <div style="background:var(--card);border-radius:12px;padding:24px;max-width:700px;width:95%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)" onclick="event.stopPropagation()">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h3 style="margin:0;font-size:16px;font-weight:700">⚙ Reglas de Recurrencia</h3>
+        <button class="btn btn-g" onclick="document.getElementById('reglas-modal').style.display='none'">✕ Cerrar</button>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:14px">Define reglas para generar movimientos automáticamente. Los generados aparecen en la tabla como pendientes (sin palomear).</p>
+      <div id="rec-form-wrap"></div>
+      <div style="margin-bottom:8px"><button class="btn btn-p" onclick="showRecForm()">+ Nueva regla</button></div>
+      <div id="rec-rules-list"></div>
+    </div>
+  </div>`;
+
   el.innerHTML=h;
+  if(document.getElementById("rec-rules-list"))renderRecRules();
 }
 
 function toggleAplicado(id){
@@ -471,22 +501,21 @@ function confirmImport(){
   window._importData=null;document.getElementById("import-panel").style.display="none";renderRegistro();
 }
 
-// ── Recurrentes ──
-function toggleRecList(){
-  const el=document.getElementById("rec-panel");
-  if(el.style.display==="block"){el.style.display="none";return;}
-  renderRecList();el.style.display="block";
+// ── Recurrentes (Modal) ──
+function openReglasModal(){
+  renderRegistro(); // ensure modal HTML exists
+  const modal=document.getElementById("reglas-modal");
+  modal.style.display="flex";
+  renderRecRules();
 }
-function renderRecList(){
-  const el=document.getElementById("rec-panel");
-  let h=`<div class="card" style="animation:fi .2s ease"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-    <h3 style="margin:0;font-size:14px;font-weight:700;color:#334155">🔄 Operaciones Programadas</h3>
-    <button class="btn btn-p" onclick="showRecForm()">+ Nueva</button>
-  </div><div id="rec-form-wrap"></div>`;
-  if(!DATA.recurrentes.length)h+=`<p style="color:var(--light);font-size:13px">Sin operaciones programadas.</p>`;
+function renderRecRules(){
+  const el=document.getElementById("rec-rules-list");
+  if(!el)return;
+  let h="";
+  if(!DATA.recurrentes.length)h+=`<p style="color:var(--light);font-size:13px">Sin reglas. Crea una para automatizar movimientos.</p>`;
   DATA.recurrentes.forEach(r=>{
     const fl=r.freq==="semanal"?"Cada 7d":r.freq==="quincenal"?"Cada 15d":r.freq==="mensual"?"Mensual":"Cada "+r.customDays+"d";
-    h+=`<div class="rec-row" style="opacity:${r.activa?1:0.5}">
+    h+=`<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;border:1px solid var(--border);margin-bottom:8px;background:${r.activa?"#fafbfc":"#f1f5f9"};opacity:${r.activa?1:0.5}">
       <div style="flex:1;min-width:0">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span class="badge ${r.tipo==="Ingreso"?"b-green":"b-red"}">${r.tipo==="Ingreso"?"▲":"▼"} ${r.tipo}</span>
@@ -496,6 +525,8 @@ function renderRecList(){
         <div style="font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:12px;flex-wrap:wrap">
           <span>🔄 ${fl}</span><span>📅 ${pD(r.fechaInicio).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}</span>
           ${r.fechaFin?`<span>⏹ ${pD(r.fechaFin).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}</span>`:""}
+          ${r.tarjetaId?`<span>${tarjetaNombre(r.tarjetaId)}</span>`:""}
+          ${r.metaId?`<span>${metaNombre(r.metaId)}</span>`:""}
         </div>
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0">
@@ -504,7 +535,6 @@ function renderRecList(){
       </div>
     </div>`;
   });
-  h+=`</div>`;
   el.innerHTML=h;
 }
 function showRecForm(){
@@ -526,10 +556,19 @@ function showRecForm(){
 function saveRec(){
   const e={id:uid(),tipo:document.getElementById("rcf-tipo").value,categoria:document.getElementById("rcf-cat").value,metodo:document.getElementById("rcf-met").value,monto:parseFloat(document.getElementById("rcf-monto").value)||0,desc:document.getElementById("rcf-desc").value,tarjetaId:document.getElementById("rcf-tarjeta").value,metaId:document.getElementById("rcf-meta").value,freq:document.getElementById("rcf-freq").value,customDays:parseInt(document.getElementById("rcf-days").value)||30,fechaInicio:document.getElementById("rcf-ini").value,fechaFin:document.getElementById("rcf-fin").value,ultimaGen:document.getElementById("rcf-ini").value,activa:true};
   if(!e.monto||!e.categoria)return;
-  DATA.recurrentes.push(e);saveKey("recurrentes");renderRecList();
+  DATA.recurrentes.push(e);
+  // Generate first entry on start date if it's today or past
+  if(e.fechaInicio<=tdy()){
+    DATA.registros.push({id:uid(),fecha:e.fechaInicio,tipo:e.tipo,categoria:e.categoria,desc:e.desc+" ↻",metodo:e.metodo,monto:e.monto,recId:e.id,tarjetaId:e.tarjetaId,metaId:e.metaId,aplicado:false});
+    saveKey("registros");
+  }
+  saveKey("recurrentes");
+  document.getElementById("rec-form-wrap").innerHTML="";
+  renderRecRules();renderRegistro();
+  toast("Regla creada — aparece en la tabla como pendiente");
 }
-function toggleRecActive(id){const r=DATA.recurrentes.find(x=>x.id===id);if(r){r.activa=!r.activa;saveKey("recurrentes");renderRecList();}}
-function delRec(id){DATA.recurrentes=DATA.recurrentes.filter(r=>r.id!==id);saveKey("recurrentes");renderRecList();}
+function toggleRecActive(id){const r=DATA.recurrentes.find(x=>x.id===id);if(r){r.activa=!r.activa;saveKey("recurrentes");renderRecRules();renderRegistro();}}
+function delRec(id){DATA.recurrentes=DATA.recurrentes.filter(r=>r.id!==id);saveKey("recurrentes");renderRecRules();renderRegistro();}
 
 // ══════════ RESUMEN ══════════
 function renderResumen(){
@@ -679,7 +718,7 @@ function renderAhorros(){
         <div><span style="font-size:11px;color:var(--light)">Rend. mensual est.</span><br><span style="font-size:13px;font-weight:600">${fmtD(c.rendMes)}</span></div>
         <div><span style="font-size:11px;color:var(--light)">Desde</span><br><span style="font-size:13px">${pD(a.fechaInicio).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}</span></div>
         <div><span style="font-size:11px;color:var(--light)">Meses transcurridos</span><br><span style="font-size:13px;font-weight:600">${c.meses}</span></div>
-        ${a.aportacion?`<div style="grid-column:1/-1"><span style="font-size:11px;color:var(--light)">Aportación mensual</span><br><span style="font-size:13px;font-weight:600">${fmt(a.aportacion)} <span style="font-size:10px;color:var(--purple)">🔄 auto en Registro</span></span></div>`:""}
+        ${a.aportacion?`<div style="grid-column:1/-1"><span style="font-size:11px;color:var(--light)">Aportación mensual</span><br><span style="font-size:13px;font-weight:600">${fmt(a.aportacion)} ${a.tarjetaId?`<span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:3px">${tarjetaNombre(a.tarjetaId)}</span>`:''}  <span style="font-size:10px;color:var(--purple)">🔄 auto en Registro</span></span></div>`:""}
       </div>
       <div style="margin-top:10px"><div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:3px"><span>Próximo rendimiento</span><span>${pD(c.proxFecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short"})}</span></div>
       <div class="bar-bg" style="height:4px"><div class="bar-fill" style="width:100%;background:${co}"></div></div></div>
@@ -690,7 +729,7 @@ function renderAhorros(){
   el.innerHTML=h;
 }
 function showAhForm(ed){
-  const a=ed||{inst:"",tipo:"SOFIPO",inicial:"",fechaInicio:tdy(),tasa:"",aportacion:"",metodo:"Transferencia"};const eid=ed?a.id:null;
+  const a=ed||{inst:"",tipo:"SOFIPO",inicial:"",fechaInicio:tdy(),tasa:"",aportacion:"",tarjetaId:""};const eid=ed?a.id:null;
   const tipos=["SOFIPO","Gubernamental","ETF","Afore","CEDE","Ahorro","Pagaré","Otro"];
   document.getElementById("ah-form").innerHTML=`<div class="card" style="margin-top:12px;animation:fi .2s ease"><div class="fg">
     <div class="fw"><span class="lbl">Institución</span><input class="inp" id="af-inst" value="${a.inst}" placeholder="Ej: Supertasas, CETES..."></div>
@@ -699,16 +738,18 @@ function showAhForm(ed){
     <div class="fw"><span class="lbl">Fecha de inicio</span><input type="date" class="inp" id="af-fecha" value="${a.fechaInicio||tdy()}"></div>
     <div class="fw"><span class="lbl">Tasa Anual %</span><input type="number" class="inp" id="af-tasa" value="${a.tasa}" step="0.1"></div>
     <div class="fw"><span class="lbl">Aportación mensual $ (opc.)</span><input type="number" class="inp" id="af-apo" value="${a.aportacion||""}" placeholder="0 = sin aportación"></div>
-    <div class="fw"><span class="lbl">Método de aportación</span><select class="inp" id="af-met">${METODOS.map(m=>`<option ${m===a.metodo?"selected":""}>${m}</option>`).join("")}</select></div>
+    <div class="fw"><span class="lbl">💳 Tarjeta de aportación</span><select class="inp" id="af-tarj">${tarjetaOptions(a.tarjetaId||"")}</select></div>
   </div>
-  <p style="font-size:11px;color:var(--muted);margin-top:8px">💡 El saldo se actualiza automáticamente cada mes aplicando el interés compuesto. Si pones aportación mensual, se crea una operación programada en el Registro.</p>
+  <p style="font-size:11px;color:var(--muted);margin-top:8px">💡 El saldo se actualiza cada mes con interés compuesto. Si pones aportación, se crea una operación programada vinculada a la tarjeta seleccionada.</p>
   <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-p" onclick="saveAh('${eid||""}')">${eid?"Actualizar":"Guardar"}</button><button class="btn btn-g" onclick="document.getElementById('ah-form').innerHTML=''">Cancelar</button></div></div>`;
 }
 function saveAh(eid){
-  const e={inst:document.getElementById("af-inst").value,tipo:document.getElementById("af-tipo").value,inicial:parseFloat(document.getElementById("af-ini").value)||0,fechaInicio:document.getElementById("af-fecha").value||tdy(),tasa:parseFloat(document.getElementById("af-tasa").value)||0,aportacion:parseFloat(document.getElementById("af-apo").value)||0,metodo:document.getElementById("af-met").value};
+  const tarjId=document.getElementById("af-tarj").value;
+  const tarj=DATA.tarjetas.find(t=>t.id===tarjId);
+  const metodo=tarj?(tarj.tipo==="Crédito"?"Crédito":"Débito"):"Transferencia";
+  const e={inst:document.getElementById("af-inst").value,tipo:document.getElementById("af-tipo").value,inicial:parseFloat(document.getElementById("af-ini").value)||0,fechaInicio:document.getElementById("af-fecha").value||tdy(),tasa:parseFloat(document.getElementById("af-tasa").value)||0,aportacion:parseFloat(document.getElementById("af-apo").value)||0,tarjetaId:tarjId,metodo};
   if(!e.inst)return;
   const id=eid||uid();
-  // Buscar si ya existe una recurrente vinculada
   const recTag="ahorro-"+id;
   const existingRec=DATA.recurrentes.findIndex(r=>r.tag===recTag);
   if(eid){
@@ -717,20 +758,18 @@ function saveAh(eid){
   } else {
     DATA.ahorros.push({...e,id});
   }
-  // Manejar recurrente de aportación
   if(e.aportacion>0){
-    const recData={id:existingRec>=0?DATA.recurrentes[existingRec].id:uid(),tag:recTag,tipo:"Gasto",categoria:"Ahorro/Inversión",desc:"Aportación "+e.inst,metodo:e.metodo,monto:e.aportacion,freq:"mensual",customDays:0,fechaInicio:e.fechaInicio,fechaFin:"",ultimaGen:e.fechaInicio,activa:true};
+    const recData={id:existingRec>=0?DATA.recurrentes[existingRec].id:uid(),tag:recTag,tipo:"Gasto",categoria:"Ahorro/Inversión",desc:"Aportación "+e.inst,metodo,monto:e.aportacion,tarjetaId:tarjId,metaId:"",freq:"mensual",customDays:0,fechaInicio:e.fechaInicio,fechaFin:"",ultimaGen:e.fechaInicio,activa:true};
     if(existingRec>=0)DATA.recurrentes[existingRec]=recData;
     else DATA.recurrentes.push(recData);
-    toast("Aportación mensual programada en Registro");
+    toast("Aportación programada"+(tarj?" con "+tarj.banco:""));
   } else if(existingRec>=0){
-    // Si quitó la aportación, eliminar la recurrente
     DATA.recurrentes.splice(existingRec,1);
   }
   saveKey("ahorros");saveKey("recurrentes");
   document.getElementById("ah-form").innerHTML="";renderAhorros();
 }
-function editAh(id){const a=DATA.ahorros.find(x=>x.id===id);if(a)showAhForm({...a,inicial:String(a.inicial),aportacion:String(a.aportacion||""),tasa:String(a.tasa)});}
+function editAh(id){const a=DATA.ahorros.find(x=>x.id===id);if(a)showAhForm({...a,inicial:String(a.inicial),aportacion:String(a.aportacion||""),tasa:String(a.tasa),tarjetaId:a.tarjetaId||""});}
 function delAh(id){
   // También eliminar recurrente vinculada
   const recTag="ahorro-"+id;
